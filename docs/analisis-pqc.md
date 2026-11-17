@@ -90,3 +90,107 @@ Fuente: NIST (2024c); valores confirmados con DigiCert (s. f.) y el registro de 
 **Por qué SLH-DSA es más conservador.** Su seguridad depende solo de que la función hash resista colisiones y segundas preimágenes, una asunción que se conoce desde hace décadas y que no depende de la dificultad de un problema algebraico estructurado. ML-DSA y ML-KEM descansan en MLWE, que tiene muchos menos años de criptoanálisis. Por eso SLH-DSA se recomienda como respaldo (diversidad criptográfica) cuando un avance contra los retículos dejara a ML-DSA comprometido, y para casos donde el tamaño de la firma sea tolerable, como certificados raíz.
 
 **Qué reemplaza a qué.** ML-KEM reemplaza el intercambio de claves (ECDH, X25519, DH, transporte RSA). ML-DSA y SLH-DSA reemplazan las firmas (ECDSA, Ed25519, RSA). ML-KEM no sirve para firmar, y los dos esquemas de firma no sirven para intercambiar claves.
+
+## 3. Plan de migración para tres perfiles
+
+### Marco de referencia
+
+Tres referencias fijan los plazos. La primera es la hoja informativa conjunta de CISA, NSA y NIST (2023), que recomienda crear una hoja de ruta de preparación cuántica, un inventario criptográfico, evaluar el riesgo y consultar a los proveedores. La segunda es el informe NIST IR 8547, en su versión final del 27 de octubre de 2026, que deprecia los algoritmos asimétricos vulnerables después de 2030 y los prohíbe después de 2035 (según el resumen de PostQuantum.com, 2026; el documento primario no se pudo consultar directamente). La tercera es CNSA 2.0 de la NSA, obligatoria para sistemas de seguridad nacional, que exige ML-KEM-1024, ML-DSA-87, AES-256 y SHA-384/512, con LMS o XMSS para firma de software y firmware, y que fija el uso exclusivo de estos algoritmos entre 2030 y 2033 según la categoría de tecnología (Encryption Consulting, 2026).
+
+El método es común a los tres perfiles: (1) inventario de sistemas con criptografía asimétrica activa, (2) clasificación de los datos por horizonte de sensibilidad, (3) criptografía híbrida (clásica y post-cuántica en paralelo) durante la transición, (4) cronograma por fases con hitos verificables, y (5) riesgos y mitigaciones. La prioridad la dicta el horizonte de los datos: cuanto más larga es la vida de un dato confidencial, antes hay que proteger su intercambio de claves.
+
+### Perfil A: hospital universitario (datos de 50 a 75 años)
+
+**Inventario.** Portal de pacientes con TLS, VPN de las sedes, firma de prescripciones con ECDSA, PKI interna, copias de seguridad y bases de datos (cifradas con AES, pero con claves envueltas o transportadas con RSA/ECC), y dispositivos médicos con firmware firmado.
+
+**Clasificación.** La historia clínica es confidencial durante toda la vida del paciente, por lo que el tráfico del portal y de las VPN es el caso típico de HNDL: lo que se capture hoy puede seguir siendo sensible dentro de 15 años o más. Las prescripciones son un problema de autenticidad, no de confidencialidad.
+
+**Estrategia híbrida.** Intercambio de claves híbrido X25519 + ML-KEM-768 en el portal y en las VPN lo antes posible; firmas duales (ECDSA más ML-DSA-65) en las prescripciones durante la transición; AES-256 en todo dato en reposo de larga vida.
+
+**Cronograma.**
+
+| Fase | Plazo | Hito verificable |
+|---|---|---|
+| 1. Inventario | Primer semestre de 2027 | Inventario criptográfico completo, con cada sistema clasificado por horizonte de datos |
+| 2. Confidencialidad | 2027 | Portal y VPN negociando X25519MLKEM768; se verifica con captura de handshake |
+| 3. PKI y HSM | 2028 | PKI interna de prueba con ML-DSA-65; HSM o proveedor con soporte confirmado |
+| 4. Firmas | 2029 | Prescripciones con firma dual ECDSA + ML-DSA-65 en producción |
+| 5. Retiro de lo clásico | Antes de 2030 y completo antes de 2035 | Sin ECDSA/RSA en uso, cumpliendo la depreciación de NIST IR 8547 |
+
+**Riesgos y mitigaciones.** Los HSM y los lectores de tarjetas pueden no soportar claves de 4 KB (mitigación: exigir soporte a los proveedores y probar antes de comprar). Los dispositivos médicos con firmware antiguo no se actualizan (mitigación: segmentar la red y priorizar su reemplazo). Los middleboxes pueden romper un ClientHello más grande (mitigación: pruebas en el piloto antes del despliegue general).
+
+### Perfil B: startup de comercio electrónico (datos de 5 a 7 años)
+
+**Inventario.** TLS 1.3 (X25519 y ECDSA) en la tienda y las API, cifrado AES-256, datos de tarjeta bajo PCI-DSS, firmas de webhooks y de JWT, y dependencia de un CDN o proveedor de nube.
+
+**Clasificación.** Los datos tienen una vida corta, de 5 a 7 años. La amenaza HNDL existe, pero la urgencia es menor que en salud. La ventaja competitiva es ofrecer compatibilidad con clientes post-cuánticos.
+
+**Estrategia híbrida.** Activar X25519MLKEM768 en el CDN y los balanceadores (los navegadores principales ya lo negocian), dejar los certificados clásicos hasta que la PKI web ofrezca firmas post-cuánticas y evaluar PQC puro más adelante.
+
+**Cronograma.**
+
+| Fase | Plazo | Hito verificable |
+|---|---|---|
+| 1. Inventario | 2027 | Lista de dependencias criptográficas, incluidas librerías y proveedores |
+| 2. Híbrido en el borde | 2027 | X25519MLKEM768 activo en CDN y balanceadores; porcentaje de conexiones híbridas medido |
+| 3. Firmas internas | 2029 a 2030 | JWT y webhooks migrados a ML-DSA o doble firma, según soporte de las librerías |
+| 4. Revisión | 2030 | Decisión documentada sobre mantener el híbrido o pasar a PQC puro |
+
+**Riesgos y mitigaciones.** El handshake más grande puede aumentar la latencia en redes móviles con pérdida (mitigación: medir antes y después, como se detalla en la sección 4). Una dependencia de un solo proveedor limita el control (mitigación: exigir al proveedor un cronograma PQC por contrato).
+
+### Perfil C: entidad gubernamental de defensa (datos de 25 a 50 años)
+
+**Inventario.** Comunicaciones clasificadas, PKI nacional, VPN entre agencias, firma de documentos oficiales, firmware y software firmados, y sistemas heredados.
+
+**Clasificación.** Datos de muy larga vida. La migración no es opcional: CNSA 2.0 es mandatoria para sistemas de seguridad nacional.
+
+**Estrategia.** Usar directamente los conjuntos de máximo nivel que fija CNSA 2.0: ML-KEM-1024 y ML-DSA-87, AES-256 y SHA-384/512, con LMS o XMSS para firma de software y firmware. SLH-DSA queda excluido de los sistemas de seguridad nacional (PostQuantum.com, 2025). Se pueden mantener híbridos clásicos cuando una interoperabilidad lo exija, pero el objetivo final es solo CNSA 2.0.
+
+**Cronograma (según las categorías de CNSA 2.0).**
+
+| Categoría | Soportar y preferir | Uso exclusivo |
+|---|---|---|
+| Firma de software y firmware | 2025 | 2030 |
+| Navegadores, servidores y servicios en la nube | 2025 | 2033 |
+| Redes tradicionales (VPN, routers) | 2026 | 2030 |
+| Sistemas operativos | 2027 | 2033 |
+
+La meta general para sistemas de seguridad nacional es 2035, alineada con NSM-10 (Encryption Consulting, 2026).
+
+**Riesgos y mitigaciones.** El equipo heredado sin actualización (mitigación: reemplazo planificado hasta 2033). Los certificados y la PKI son difíciles de reemplazar en bloque (mitigación: dobles jerarquías en paralelo). La dependencia de proveedores que no cumplen CNSA 2.0 (mitigación: exigir validación de cumplimiento en las compras).
+
+### Justificación de la priorización
+
+El orden Perfil C, Perfil A, Perfil B responde al horizonte de los datos y a si hay una obligación externa. C tiene obligación regulatoria y datos de hasta 50 años. A no tiene una norma que lo obligue de inmediato, pero sus datos duran más que cualquier otro perfil y están expuestos a HNDL en el portal. B tiene el horizonte más corto y puede apoyarse en su CDN para la parte de confidencialidad con poco esfuerzo propio.
+
+## 4. Tamaños de claves y firmas: PQC frente a criptografía clásica y su efecto en TLS 1.3 híbrido
+
+**Tabla 5. Comparación de tamaños (bytes)**
+
+| Algoritmo | Tipo | Clave pública | Clave privada | Firma / ciphertext | Nivel de seguridad NIST |
+|---|---|---|---|---|---|
+| RSA-3072 | Cifrado/firma clásico | ~400 | ~1600 | 384 (firma) | ~128 bits clásicos (no post-cuántico) |
+| ECDSA P-256 | Firma clásica | 64 | 32 | ~70 a 72 (DER) | ~128 bits clásicos (no post-cuántico) |
+| X25519 | Intercambio de claves clásico | 32 | 32 | N/A (no es firma) | ~128 bits clásicos (no post-cuántico) |
+| ML-KEM-768 (FIPS 203) | KEM post-cuántico | 1184 | 2400 | 1088 (ciphertext) | Nivel 3 (≈ AES-192) |
+| ML-DSA-65 (FIPS 204) | Firma post-cuántica | 1952 | 4032 | 3309 | Nivel 3 (≈ AES-192) |
+| SLH-DSA-128s (FIPS 205) | Firma post-cuántica (hash) | 32 | 64 | 7856 | Nivel 1 (≈ AES-128) |
+
+Los tamaños de los tres algoritmos post-cuánticos salen de los documentos FIPS 203, 204 y 205 (NIST, 2024a, 2024b, 2024c), ya contrastados en la sección 2. Los tamaños de RSA-3072, ECDSA P-256 y X25519 no vienen de esos documentos: son los tamaños estándar de cada esquema (el módulo para RSA, el punto sin comprimir para la curva y la clave de 32 bytes de X25519), y los de RSA son aproximados porque el formato de la clave privada varía.
+
+**Crecimiento.** La clave pública de ML-KEM-768 es unas 37 veces mayor que la de X25519 (1184 / 32 = 37). La firma de ML-DSA-65 es unas 46 veces mayor que una firma ECDSA P-256 (3309 / 72 ≈ 46) y su clave pública unas 30 veces mayor (1952 / 64 ≈ 30). SLH-DSA-128s tiene claves diminutas (32 bytes) pero una firma de 7856 bytes, unas 2,4 veces la de ML-DSA-65 (7856 / 3309 ≈ 2,4).
+
+### Impacto en un handshake TLS 1.3 híbrido
+
+**Intercambio de claves.** En el grupo híbrido X25519MLKEM768, el `key_share` del cliente es la concatenación de la clave de encapsulación de ML-KEM-768 y la de X25519: 1216 bytes (1184 + 32), y la respuesta del servidor son 1120 bytes (1088 + 32). Estos tamaños aparecen en la especificación de IETF (Kwiatkowski et al., 2026). Frente a los 32 bytes de X25519 solo, el cliente envía 1184 bytes más y el servidor 1088 bytes más. Con los demás campos, el ClientHello pasa a ocupar cerca de 1300 a 1500 bytes (Encryption Consulting, 2026), un valor del orden de un segmento TCP típico (unos 1460 bytes de carga útil). El equipo de Chrome reportó un aumento de alrededor de 4 % en la latencia del handshake al desplegar ML-KEM, por los bytes adicionales y la fragmentación (según Ristic, 2026). El crecimiento del intercambio de claves casi nunca agrega una ida y vuelta completa, pero no es gratis.
+
+**Autenticación.** El cambio grande es el de las firmas. Un handshake TLS típico lleva dos claves públicas y cinco firmas (Google, 2024). Con los tamaños de la Tabla 5, el cálculo propio es:
+
+| Cadena de autenticación | Cálculo | Total aproximado |
+|---|---|---|
+| ECDSA P-256 | 2 × 64 + 5 × 72 | ≈ 0,5 KB (488 bytes) |
+| ML-DSA-65 | 2 × 1952 + 5 × 3309 | ≈ 20,4 KB (20 449 bytes) |
+
+Es unas 42 veces más (20 449 / 488), muy cerca del "unas 40 veces" que reporta el equipo de Chrome. Con una ventana de congestión inicial de 10 segmentos (Chu et al., 2013; unos 14 600 bytes), la respuesta del servidor con la cadena ML-DSA ya no cabe en el primer vuelo y exige al menos una ronda de red adicional, mientras que una cadena ECDSA sí cabe con holgura. Cuando se suman los certificados de transparencia, el overhead de una cadena de profundidad 2 con ML-DSA-65 llega a unas 32 veces el de Ed25519 (Encryption Consulting, 2026).
+
+**Conclusión.** El intercambio híbrido de claves tiene un costo pequeño que, en redes con buena conectividad, normalmente cabe en el primer vuelo. La autenticación con ML-DSA es la que puede añadir rondas y fragmentación, sobre todo en redes con alta latencia o pérdida de paquetes. Esto justifica el orden de la migración: primero el intercambio de claves (que además es lo que protege contra HNDL) y después las firmas y certificados.
