@@ -194,3 +194,61 @@ Los tamaños de los tres algoritmos post-cuánticos salen de los documentos FIPS
 Es unas 42 veces más (20 449 / 488), muy cerca del "unas 40 veces" que reporta el equipo de Chrome. Con una ventana de congestión inicial de 10 segmentos (Chu et al., 2013; unos 14 600 bytes), la respuesta del servidor con la cadena ML-DSA ya no cabe en el primer vuelo y exige al menos una ronda de red adicional, mientras que una cadena ECDSA sí cabe con holgura. Cuando se suman los certificados de transparencia, el overhead de una cadena de profundidad 2 con ML-DSA-65 llega a unas 32 veces el de Ed25519 (Encryption Consulting, 2026).
 
 **Conclusión.** El intercambio híbrido de claves tiene un costo pequeño que, en redes con buena conectividad, normalmente cabe en el primer vuelo. La autenticación con ML-DSA es la que puede añadir rondas y fragmentación, sobre todo en redes con alta latencia o pérdida de paquetes. Esto justifica el orden de la migración: primero el intercambio de claves (que además es lo que protege contra HNDL) y después las firmas y certificados.
+
+## Decisión técnica 3: ¿qué algoritmo NIST firma las prescripciones del Perfil A?
+
+Se eligió ML-DSA-65 como algoritmo principal, con SLH-DSA como respaldo. ML-KEM queda descartado de entrada porque es un mecanismo de encapsulamiento de claves: permite acordar un secreto, pero no produce una firma verificable, y firmar una prescripción es un caso de firma digital. Entre los dos esquemas de firma, los datos de la Tabla 5 favorecen a ML-DSA-65. Su firma ocupa 3309 bytes frente a 7856 de SLH-DSA-128s. Para ilustrar el volumen, con un supuesto de 5000 prescripciones por día serían unos 16,5 MB frente a 39,3 MB diarios. Además, SLH-DSA firma con unos 0,2 segundos por firma en un solo núcleo (Dang, 2025), un costo que el portal notaría, mientras que ML-DSA es mucho más ágil. El argumento a favor de SLH-DSA es su asunción conservadora, basada solo en hash. Aquí pesa menos, porque el horizonte de 50 a 75 años del hospital describe la confidencialidad de la historia clínica, es decir, la amenaza HNDL, y no la vigencia de una firma: según el equipo de Chrome, no existe un equivalente de *store now, decrypt later* para la autenticación (Google, 2024). Un atacante futuro no puede falsificar retroactivamente un acto que ya fue verificado en su momento. Hay un matiz honesto: si las prescripciones deben servir como prueba legal durante décadas, convendrá conservar sellos de tiempo y volver a firmar los archivos históricos. Por eso la recomendación incluye firmas duales (ECDSA más ML-DSA-65) durante la transición y SLH-DSA reservado para certificados raíz o de larga vida, donde el rendimiento importa menos que la prudencia.
+
+## Decisión técnica 4: ¿híbrido permanente o transitorio para el Perfil B?
+
+El modo híbrido es la elección correcta para el Perfil B desde ahora, pero como etapa de transición y no como estado definitivo. A favor del híbrido pesa el bajo sobrecosto medido en la sección 4: el `key_share` crece 1184 bytes en el cliente y 1088 en el servidor, el ClientHello sigue siendo cercano a un segmento TCP y no suele agregar rondas, aunque Chrome midió un aumento de unos 4 % en la latencia. A cambio se obtiene una protección doble contra dos fallas que no están correlacionadas: que una computadora cuántica rompa X25519, o que se descubra una debilidad clásica en ML-KEM, que tiene muchos menos años de escrutinio público que la criptografía de curvas elípticas. Mientras ML-KEM acumula años de análisis, el híbrido asegura que el sistema sea seguro si al menos uno de los dos componentes resiste. Es además la práctica por defecto de los navegadores y CDN principales, y el IETF la estandarizó en el RFC 10024 (Kwiatkowski et al., 2026), de modo que adoptarla cuesta poco. En contra de hacerlo permanente: cada handshake paga bytes de más y mantiene dos implementaciones. Con datos de solo 5 a 7 años y menos presión regulatoria que el Perfil C, la startup puede esperar a que ML-KEM acumule confianza y a que los plazos de CNSA 2.0 (hasta 2033) y de NIST IR 8547 (2030 y 2035) se asienten, y decidir hacia 2030 si pasa a PQC puro. Como las firmas de certificados siguen siendo clásicas hasta que la PKI web las soporte, el híbrido de intercambio de claves es el primer paso, no el único.
+
+## Conclusiones
+
+1. La amenaza cuántica afecta de forma desigual. Los algoritmos asimétricos (RSA, ECDSA, ECDH, Ed25519) caen por completo ante Shor y se reemplazan; los simétricos y los hash se debilitan ante Grover y se resuelven con AES-256 y SHA-384/512.
+2. Los tres estándares NIST de 2024 se reparten el trabajo: ML-KEM para establecer claves, ML-DSA como firma de uso general y SLH-DSA como firma conservadora de respaldo.
+3. El costo de la migración está en los bytes: la clave pública de ML-KEM-768 es unas 37 veces la de X25519 y la firma de ML-DSA-65 unas 46 veces la de ECDSA. El intercambio híbrido casi cabe en el primer vuelo TCP, pero una cadena de certificados con ML-DSA llega a unos 20 KB y puede agregar una ronda.
+4. Por eso conviene migrar primero el intercambio de claves, que es lo que protege contra HNDL, y después las firmas, que no tienen un equivalente de esa amenaza.
+5. El plan depende del horizonte de los datos y de la obligación externa: el Perfil C ya está obligado por CNSA 2.0, el Perfil A debe empezar por la confidencialidad por la vida de sus datos, y el Perfil B puede apoyarse en su proveedor.
+
+**Limitaciones.** Los documentos FIPS primarios no se abrieron directamente en este trabajo; los tamaños se contrastaron con varias implementaciones y resúmenes técnicos que coinciden entre sí. NIST IR 8547 y CNSA 2.0 se citan a través de resúmenes de terceros. El tamaño de claves de RSA y ECDSA es aproximado. El cálculo de 20 KB y de 5000 prescripciones por día es propio y depende de supuestos explícitos. No se consultó ETSI GR QSC 006 ni se mide ningún handshake real.
+
+## Referencias
+
+Chu, J., Dukkipati, N., Cheng, Y., y Mathis, M. (2013). *Increasing TCP's initial window* (RFC 6928). IETF. https://www.rfc-editor.org/info/rfc6928
+
+CISA, NSA y NIST. (2023, 21 de agosto). *Quantum-readiness: Migration to post-quantum cryptography*. https://www.cisa.gov/resources-tools/resources/quantum-readiness-migration-post-quantum-cryptography
+
+Dang, Q. (2025, 25 de septiembre). *Smaller SLH-DSA* [Presentación]. NIST Cryptographic Technology Group. https://csrc.nist.gov/csrc/media/presentations/2025/sphincs-smaller-parameter-sets/sphincs-dang_2.2.pdf
+
+DigiCert. (s. f.). *SPHINCS+ / SLH-DSA*. https://www.digicert.com/insights/post-quantum-cryptography/sphincs
+
+Encryption Consulting. (2024). *Understanding FIPS 204*. https://www.encryptionconsulting.com/understanding-fips-204/
+
+Encryption Consulting. (2026). *What is CNSA 2.0?* https://www.encryptionconsulting.com/education-center/what-is-cnsa-2-0/
+
+Gidney, C. (2025). *How to factor 2048 bit RSA integers with less than a million noisy qubits*. arXiv. https://arxiv.org/abs/2505.15917
+
+Google. (2024). *Advancing our amazing bet on asymmetric cryptography*. Chromium Blog. https://blog.google/chromium/advancing-our-amazing-bet-on-asymmetric/
+
+Jaques, S., Naehrig, M., Roetteler, M., y Virdia, F. (2020). Implementing Grover oracles for quantum key search on AES and LowMC. En *Advances in Cryptology, EUROCRYPT 2020*. Springer. https://iacr.org/archive/eurocrypt2020/12105182/12105182.pdf
+
+Kwiatkowski, K., Kampanakis, P., Westerbaan, B. E., y Stebila, D. (2026). *Post-quantum traditional (PQ/T) hybrid key agreement mechanisms for TLS 1.3* (RFC 10024). IETF. https://datatracker.ietf.org/doc/rfc10024/
+
+National Institute of Standards and Technology. (2024a). *Module-lattice-based key-encapsulation mechanism standard* (FIPS 203). https://doi.org/10.6028/NIST.FIPS.203
+
+National Institute of Standards and Technology. (2024b). *Module-lattice-based digital signature standard* (FIPS 204). https://doi.org/10.6028/NIST.FIPS.204
+
+National Institute of Standards and Technology. (2024c). *Stateless hash-based digital signature standard* (FIPS 205). https://doi.org/10.6028/NIST.FIPS.205
+
+Open Quantum Safe. (s. f.). *ML-KEM*. liboqs. https://openquantumsafe.org/liboqs/algorithms/kem/ml-kem
+
+PostQuantum.com. (2025). *NSA CNSA 2.0 FAQ v2.1 update*. https://postquantum.com/security-pqc/nsa-cnsa-2-0-faq-v2-1-update/
+
+PostQuantum.com. (2026, 27 de octubre). *NIST finalizes its post-quantum transition plan, deprecating RSA and ECC at all approved key sizes after 2030*. https://postquantum.com/security-pqc/nist-ir-8547-final/
+
+Project Eleven. (s. f.). *SLH-DSA*. PQ Crypto Registry. https://registry.projecteleven.com/algorithms/slh-dsa
+
+Ristic, I. (2026, 26 de octubre). *Performance of post-quantum cryptography*. Red Sift. https://redsift.com/blog/post-quantum-cryptography-performance
+
+The Go Authors. (s. f.). *crypto/mldsa*. https://go.googlesource.com/go/+/refs/heads/master/src/crypto/mldsa/mldsa.go
